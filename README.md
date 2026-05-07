@@ -1,4 +1,4 @@
-# 🤖 Kaiser: Asistente Inteligente de Terminal
+#  Kaiser: Asistente Inteligente de Terminal
 
 Kaiser es un componente de software ligero diseñado para interceptar comandos de Linux y sus salidas, proporcionando explicaciones contextuales instantáneas directamente en tu shell mediante la API local de **Ollama**.
 

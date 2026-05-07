@@ -1,6 +1,6 @@
-# 🤖 Term-AI: Asistente Inteligente de Terminal
+# 🤖 Kaiser: Asistente Inteligente de Terminal
 
-Term-AI es un componente de software ligero diseñado para interceptar comandos de Linux y sus salidas, proporcionando explicaciones contextuales instantáneas directamente en tu shell mediante la API local de **Ollama**.
+Kaiser es un componente de software ligero diseñado para interceptar comandos de Linux y sus salidas, proporcionando explicaciones contextuales instantáneas directamente en tu shell mediante la API local de **Ollama**.
 
 Este proyecto utiliza una base de conocimientos local personalizada (`linuxCommands.txt`) para asegurar que las explicaciones sean precisas y sigan las recomendaciones de tu propia guía de comandos.
 
@@ -28,7 +28,7 @@ Este proyecto utiliza una base de conocimientos local personalizada (`linuxComma
 
 ## 🚀 Instalación
 
-Para instalar Term-AI en tu sistema, sigue estos pasos:
+Para instalar Kaiser en tu sistema, sigue estos pasos:
 
 1.  Dale permisos de ejecución al instalador:
     ```bash
@@ -58,7 +58,7 @@ ai "Cómo puedo listar solo archivos .txt?"
 ```
 
 ### 💬 Chat Directo
-Si pasas una frase entre comillas que no sea un comando ejecutable (ej. `ai "explícame qué es un kernel"`), Term-AI entrará en modo chat directo sin intentar ejecutar nada en tu sistema.
+Si pasas una frase entre comillas que no sea un comando ejecutable (ej. `ai "explícame qué es un kernel"`), Kaiser entrará en modo chat directo sin intentar ejecutar nada en tu sistema.
 
 ### ⚙️ Configuración Interactiva
 Ahora puedes configurar el sistema sin editar archivos manualmente. Simplemente ejecuta:

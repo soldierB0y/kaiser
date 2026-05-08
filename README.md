@@ -55,10 +55,15 @@ Una vez instalado, simplemente antepón el comando `ai` a cualquier instrucción
 ai ls /directorio/inexistente
 ai uname -a
 ai "Cómo puedo listar solo archivos .txt?"
+ai "explica el error paso a paso" cat archivo_inexistente.txt
 ```
 
-### 💬 Chat Directo
-Si pasas una frase entre comillas que no sea un comando ejecutable (ej. `ai "explícame qué es un kernel"`), Kaiser entrará en modo chat directo sin intentar ejecutar nada en tu sistema.
+### 💬 Chat y Preguntas Específicas
+Term-AI es inteligente detectando tu intención:
+
+1.  **Chat Directo**: Si solo pasas una frase entre comillas (ej. `ai "qué es systemd"`), te responderá directamente.
+2.  **Análisis con Pregunta**: Si pasas una frase entre comillas seguida de un comando (ej. `ai "por qué falló?" ls /root`), ejecutará el comando y analizará el resultado respondiendo específicamente a tu pregunta.
+3.  **Análisis Estándar**: Si solo pasas el comando (ej. `ai ls`), analizará el resultado de forma general.
 
 ### ⚙️ Configuración Interactiva
 Ahora puedes configurar el sistema sin editar archivos manualmente. Simplemente ejecuta:
@@ -66,6 +71,19 @@ Ahora puedes configurar el sistema sin editar archivos manualmente. Simplemente 
 ai config
 ```
 Esto te permitirá cambiar el modelo, la URL de Ollama, los tiempos de espera y la lista de comandos excluidos de forma interactiva.
+
+### 🧠 Memoria de Contexto
+Kaiser ahora tiene memoria. Recuerda las últimas interacciones para que puedas hacer preguntas de seguimiento:
+```bash
+ai "ls /directorio/inexistente"
+ai "por qué falló el comando anterior?"
+```
+
+### 🧹 Borrar Historial
+Si quieres que la IA olvide las interacciones previas y empiece de cero:
+```bash
+ai --clear-history
+```
 
 ### Exclusión de Comandos
 El sistema ignorará automáticamente comandos definidos en la lista de exclusión (ej. `top`, `vim`, `ssh`) para evitar saturar la IA con salidas innecesarias o flujos interactivos.
@@ -80,11 +98,12 @@ ai config
 
 | Variable | Descripción | Valor por Defecto |
 | :--- | :--- | :--- |
-| `OLLAMA_URL` | Dirección del servidor Ollama. | `"http://localhost:11434/api/generate"` |
+| `OLLAMA_URL` | Dirección del endpoint de chat de Ollama. | `"http://localhost:11434/api/chat"` |
 | `DEFAULT_MODEL` | Modelo de IA a utilizar. | `"qwen2.5-coder:7b"` |
 | `TIMEOUT` | Tiempo máximo de espera para la respuesta de la IA (segundos). | `30` |
-| `MAX_OUTPUT_CHARS` | Límite de caracteres de la salida del comando que se envían a la IA. | `2000` |
-| `EXCLUDED_COMMANDS` | Lista de comandos que nunca serán analizados por la IA. | `["top", "nano", "vim", ...]` |
+| `MAX_OUTPUT_CHARS` | Límite de caracteres de la salida del comando. | `2000` |
+| `MAX_HISTORY` | Número de interacciones previas a recordar. | `5` |
+| `EXCLUDED_COMMANDS` | Lista de comandos ignorados. | `["top", "nano", "vim", ...]` |
 | `KNOWLEDGE_BASE` | Ruta al archivo de manual local. | `"/ruta/a/linuxCommands.txt"` |
 
 > [!TIP]

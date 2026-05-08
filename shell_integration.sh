@@ -15,15 +15,23 @@ ai_wrapper() {
         return
     fi
 
-    # Detectar si es una pregunta directa (chat)
-    # Si hay un solo argumento y no es un comando ejecutable en el sistema
-    if [ $# -eq 1 ] && ! command -v "$1" >/dev/null 2>&1; then
+    local custom_prompt=""
+    local cmd=""
+
+    # Caso: ai "pregunta" comando (múltiples args, el primero no es un comando ejecutable)
+    if [ $# -gt 1 ] && ! command -v "$1" >/dev/null 2>&1; then
+        custom_prompt="$1"
+        shift
+        cmd="$*"
+    # Caso: ai "pregunta" (un solo argumento que no es comando -> Chat directo)
+    elif [ $# -eq 1 ] && ! command -v "$1" >/dev/null 2>&1; then
         python3 "$AI_PYTHON_SCRIPT" --chat "$1"
         return
+    else
+        # Caso normal: ai comando (o ai comando args)
+        cmd="$*"
     fi
 
-    # Capturar el comando completo
-    local cmd="$*"
     local tmp_output
     tmp_output=$(mktemp /tmp/ai_term.XXXXXX)
 
@@ -34,7 +42,11 @@ ai_wrapper() {
 
     # Procesar con IA
     if [ -f "$AI_PYTHON_SCRIPT" ]; then
-        python3 "$AI_PYTHON_SCRIPT" "$cmd" < "$tmp_output"
+        if [ -n "$custom_prompt" ]; then
+            python3 "$AI_PYTHON_SCRIPT" --prompt "$custom_prompt" "$cmd" < "$tmp_output"
+        else
+            python3 "$AI_PYTHON_SCRIPT" "$cmd" < "$tmp_output"
+        fi
     fi
 
     rm "$tmp_output"

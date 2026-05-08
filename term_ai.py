@@ -4,6 +4,9 @@ import json
 import requests
 import argparse
 import os
+import time
+import threading
+from itertools import cycle
 
 # Configuración por defecto
 CONFIG_PATH = os.path.expanduser("~/.term_ai_config.json")
@@ -16,7 +19,7 @@ DEFAULT_CONFIG = {
         "top", "htop", "nano", "vim", "vi", "less", "more", "man", 
         "cat", "ssh", "watch", "tail", "journalctl"
     ],
-    "KNOWLEDGE_BASE": "/home/soldier/Data/projects/Info/linuxCommands.txt"
+    "KNOWLEDGE_BASE": os.path.expanduser("~/Data/projects/Info/linuxCommands.txt")
 }
 
 # Códigos de escape ANSI para colores
@@ -26,13 +29,56 @@ YELLOW = "\033[93m"
 ITALIC = "\033[3m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
+CYAN = "\033[96m"
+
+class LoadingSpinner:
+    """Displays an animated loading spinner while waiting for AI responses."""
+    def __init__(self, message="Thinking", delay=0.1):
+        self.message = message
+        self.delay = delay
+        self.running = False
+        self.thread = None
+        # Spinners: dots, line, arrow, dots2, moon, circle
+        self.spinners = {
+            "dots": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            "line": ["-", "\\", "|", "/"],
+            "arrow": ["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
+            "dots2": ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
+            "moon": ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"],
+            "dots3": ["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"],
+        }
+        self.current_spinner = self.spinners["dots"]
+    
+    def start(self):
+        """Start the loading spinner animation."""
+        self.running = True
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        """Stop the loading spinner animation."""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+        # Clear the line
+        sys.stdout.write("\r" + " " * (len(self.message) + 15) + "\r")
+        sys.stdout.flush()
+    
+    def _animate(self):
+        """Animation loop."""
+        spinner_cycle = cycle(self.current_spinner)
+        while self.running:
+            frame = next(spinner_cycle)
+            sys.stdout.write(f"\r{CYAN}{frame} {self.message}...{RESET}")
+            sys.stdout.flush()
+            time.sleep(self.delay)
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, 'r') as f:
                 return {**DEFAULT_CONFIG, **json.load(f)}
-        except:
+        except (json.JSONDecodeError, IOError):
             return DEFAULT_CONFIG
     return DEFAULT_CONFIG
 
@@ -62,7 +108,7 @@ def interactive_config():
                 if isinstance(value, int):
                     try:
                         config[key] = int(new_val)
-                    except:
+                    except ValueError:
                         print(f"Valor inválido para {key}, se mantiene el anterior.")
                 else:
                     config[key] = new_val
@@ -77,17 +123,15 @@ def get_local_context(command, knowledge_base):
     base_cmd = command.split()[0] if command else ""
     try:
         search_pattern = f"$ {base_cmd}"
-        context = []
         with open(knowledge_base, 'r', encoding='latin-1') as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
                 if search_pattern in line:
                     start = max(0, i - 10)
                     end = min(len(lines), i + 5)
-                    context.append("".join(lines[start:end]))
-                    break 
-        return "\n".join(context) if context else ""
-    except Exception:
+                    return "".join(lines[start:end])
+        return ""
+    except (IOError, UnicodeDecodeError):
         return ""
 
 def ask_ai(prompt, system_prompt, config):
@@ -98,12 +142,18 @@ def ask_ai(prompt, system_prompt, config):
         "stream": False
     }
     
+    # Start loading spinner
+    spinner = LoadingSpinner(message=f"{BLUE}Analyzing with {config['DEFAULT_MODEL']}")
+    spinner.start()
+    
     try:
         response = requests.post(config["OLLAMA_URL"], json=payload, timeout=config["TIMEOUT"])
         response.raise_for_status()
         result = response.json()
+        spinner.stop()
         return result.get("response", "No se pudo obtener una respuesta de la IA.")
     except requests.exceptions.RequestException as e:
+        spinner.stop()
         return f"Error al conectar con Ollama: {e}"
 
 def main():

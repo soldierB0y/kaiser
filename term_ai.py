@@ -35,12 +35,13 @@ BOLD = "\033[1m"
 CYAN = "\033[96m"
 
 class LoadingSpinner:
-    """Displays an animated loading spinner while waiting for AI responses."""
+    """Displays an animated loading spinner with elapsed time counter while waiting for AI responses."""
     def __init__(self, message="Thinking", delay=0.1):
         self.message = message
         self.delay = delay
         self.running = False
         self.thread = None
+        self.start_time = None
         self.spinners = {
             "dots": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         }
@@ -48,6 +49,7 @@ class LoadingSpinner:
     
     def start(self):
         self.running = True
+        self.start_time = time.time()
         self.thread = threading.Thread(target=self._animate, daemon=True)
         self.thread.start()
     
@@ -55,14 +57,17 @@ class LoadingSpinner:
         self.running = False
         if self.thread:
             self.thread.join()
-        sys.stdout.write("\r" + " " * (len(self.message) + 15) + "\r")
+        elapsed = int(time.time() - self.start_time)
+        # Mantener el tiempo final en pantalla
+        sys.stdout.write(f"\r{GREEN}✓{RESET} {self.message} ({elapsed}s){RESET}\033[K\n")
         sys.stdout.flush()
     
     def _animate(self):
         spinner_cycle = cycle(self.current_spinner)
         while self.running:
             frame = next(spinner_cycle)
-            sys.stdout.write(f"\r{CYAN}{frame} {self.message}...{RESET}")
+            elapsed = int(time.time() - self.start_time)
+            sys.stdout.write(f"\r{CYAN}{frame} {self.message}... ({elapsed}s){RESET}")
             sys.stdout.flush()
             time.sleep(self.delay)
 
@@ -158,13 +163,90 @@ def ask_ai(messages, config):
         response.raise_for_status()
         result = response.json()
         spinner.stop()
-        return result.get("message", {}).get("content", "No se pudo obtener una respuesta de la IA.")
+        
+        # Extract token information
+        input_tokens = result.get("prompt_eval_count", 0)
+        output_tokens = result.get("eval_count", 0)
+        
+        # Handle both new and old Ollama API response formats
+        if "message" in result and "content" in result["message"]:
+            content = result["message"]["content"]
+        elif "response" in result:
+            # Old API format
+            content = result["response"] if result["response"] else "La IA no generó una respuesta."
+        else:
+            return f"Respuesta inesperada del servidor: {json.dumps(result)}", 0, 0
+        
+        return content, input_tokens, output_tokens
+    except requests.exceptions.Timeout:
+        spinner.stop()
+        return f"❌ Error de tiempo: Ollama tardó más de {config['TIMEOUT']} segundos", 0, 0
+    except requests.exceptions.ConnectionError as e:
+        spinner.stop()
+        return f"❌ No se puede conectar a Ollama en {config['OLLAMA_URL']}: {e}", 0, 0
     except requests.exceptions.RequestException as e:
         spinner.stop()
-        return f"Error al conectar con Ollama: {e}"
+        return f"❌ Error de solicitud: {e}", 0, 0
+    except json.JSONDecodeError as e:
+        spinner.stop()
+        return f"❌ Error al procesar respuesta JSON: {e}", 0, 0
+    except Exception as e:
+        spinner.stop()
+        return f"❌ Error inesperado: {type(e).__name__}: {e}", 0, 0
 
 def main():
-    parser = argparse.ArgumentParser(description="Analizador de comandos Linux con memoria mediante Ollama.")
+    parser = argparse.ArgumentParser(
+        description="Analizador de comandos Linux con memoria mediante Ollama.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+FUNCIONES DISPONIBLES:
+
+  1. CHAT DIRECTO CON IA (--chat)
+     Conversa libremente con la IA sin procesar comandos.
+     Uso: ai --chat "Tu pregunta aquí"
+     Ejemplo: ai --chat "¿Cómo funciona Docker?"
+
+  2. ANÁLISIS DE COMANDOS (modo por defecto)
+     Analiza un comando Linux y su salida. Canaliza la salida del comando.
+     Uso: comando | ai "comando"
+     Ejemplo: ls -la | ai "ls"
+
+  3. ANÁLISIS CON PREGUNTA PERSONALIZADA (--prompt)
+     Analiza un comando pero responde a una pregunta específica.
+     Uso: comando | ai "comando" --prompt "Tu pregunta"
+     Ejemplo: ps aux | ai "ps aux" --prompt "¿Qué procesos están corriendo?"
+
+  4. CONFIGURACIÓN INTERACTIVA (--config)
+     Abre el configurador interactivo para personalizar opciones.
+     Uso: ai --config
+     Personaliza: URL de Ollama, modelo, timeout, límites, etc.
+
+  5. BORRAR HISTORIAL (--clear-history)
+     Borra todo el historial de conversaciones guardado.
+     Uso: ai --clear-history
+
+CONFIGURACIÓN:
+  El archivo de config se guarda en: ~/.term_ai_config.json
+  El historial se guarda en: ~/.term_ai_history.json
+
+EJEMPLOS COMPLETOS:
+
+  # Conversar con la IA
+  $ ai --chat "Explícame qué es un shell script"
+
+  # Analizar comando
+  $ echo "archivos" | ai "ls"
+
+  # Preguntar específicamente sobre la salida
+  $ ps aux | ai "ps" --prompt "¿Qué proceso está usando más memoria?"
+
+  # Cambiar configuración
+  $ ai --config
+
+  # Limpiar historial
+  $ ai --clear-history
+        """
+    )
     parser.add_argument("command", nargs='?', help="El comando o pregunta para la IA.")
     parser.add_argument("--config", action="store_true", help="Abrir configuración interactiva.")
     parser.add_argument("--chat", action="store_true", help="Hablar directamente con la IA.")
@@ -196,8 +278,9 @@ def main():
         messages = [{"role": "system", "content": system_prompt}] + history
         messages.append({"role": "user", "content": args.command})
         
-        explanation = ask_ai(messages, config)
+        explanation, input_tokens, output_tokens = ask_ai(messages, config)
         print(f"{ITALIC}{explanation}{RESET}\n")
+        print(f"{CYAN}📊 Tokens - Entrada: {input_tokens} | Salida: {output_tokens}{RESET}\n")
         
         history.append({"role": "user", "content": args.command})
         history.append({"role": "assistant", "content": explanation})
@@ -231,10 +314,11 @@ def main():
     messages = [{"role": "system", "content": analysis_system}] + history
     messages.append({"role": "user", "content": user_content})
 
-    explanation = ask_ai(messages, config)
+    explanation, input_tokens, output_tokens = ask_ai(messages, config)
     
-    print(f"\n{BLUE}{BOLD}🤖 IA Feedback:{RESET}")
+    print(f"{BLUE}{BOLD}🤖 IA Feedback:{RESET}")
     print(f"{ITALIC}{explanation}{RESET}\n")
+    print(f"{CYAN}📊 Tokens - Entrada: {input_tokens} | Salida: {output_tokens}{RESET}\n")
 
     # Guardar en el historial una versión resumida para no saturar el contexto futuro
     history.append({"role": "user", "content": f"Comando ejecutado: {args.command}"})

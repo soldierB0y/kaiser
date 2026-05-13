@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import json
+import re
 import requests
 import argparse
 import os
@@ -16,8 +17,10 @@ DEFAULT_CONFIG = {
     "OLLAMA_URL": "http://localhost:11434/api/chat",
     "DEFAULT_MODEL": "qwen2.5-coder:7b",
     "TIMEOUT": 30,
-    "MAX_OUTPUT_CHARS": 2000,
+    "MAX_INPUT_CHARS": 5000,       # Máx. caracteres leídos del output del comando
+    "MAX_RESPONSE_TOKENS": 500,    # Máx. tokens que la IA puede generar (num_predict)
     "MAX_HISTORY": 5,  # Número de interacciones previas a recordar
+    "LANGUAGE": "es",  # Idioma de las respuestas (es/en)
     "EXCLUDED_COMMANDS": [
         "top", "htop", "nano", "vim", "vi", "less", "more", "man", 
         "cat", "ssh", "watch", "tail", "journalctl"
@@ -75,7 +78,13 @@ def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, 'r') as f:
-                return {**DEFAULT_CONFIG, **json.load(f)}
+                user_config = json.load(f)
+            # Migrar clave antigua MAX_OUTPUT_CHARS -> MAX_INPUT_CHARS
+            if "MAX_OUTPUT_CHARS" in user_config and "MAX_INPUT_CHARS" not in user_config:
+                user_config["MAX_INPUT_CHARS"] = user_config.pop("MAX_OUTPUT_CHARS")
+            elif "MAX_OUTPUT_CHARS" in user_config:
+                user_config.pop("MAX_OUTPUT_CHARS")
+            return {**DEFAULT_CONFIG, **user_config}
         except:
             return DEFAULT_CONFIG
     return DEFAULT_CONFIG
@@ -118,6 +127,12 @@ def interactive_config():
             new_val = input(f"{BOLD}{key}{RESET} [{current}]: ").strip()
             if new_val:
                 config[key] = [cmd.strip() for cmd in new_val.split(",")]
+        elif key == "LANGUAGE":
+            new_val = input(f"{BOLD}{key}{RESET} (es/en) [{value}]: ").strip().lower()
+            if new_val in ["es", "en"]:
+                config[key] = new_val
+            elif new_val:
+                print(f"{YELLOW}⚠️ Idioma no soportado. Se mantiene {value}.{RESET}")
         else:
             new_val = input(f"{BOLD}{key}{RESET} [{value}]: ").strip()
             if new_val:
@@ -125,7 +140,7 @@ def interactive_config():
                     try:
                         config[key] = int(new_val)
                     except ValueError:
-                        print(f"Valor inválido para {key}, se mantiene el anterior.")
+                        print(f"{YELLOW}⚠️ Valor inválido para {key}, se mantiene {value}.{RESET}")
                 else:
                     config[key] = new_val
     
@@ -148,11 +163,20 @@ def get_local_context(command, knowledge_base):
     except:
         return ""
 
+def strip_thinking(text):
+    """Remove <think>...</think> blocks from model output (reasoning models like Gemma4, Qwen3)."""
+    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    return cleaned.strip()
+
 def ask_ai(messages, config):
     payload = {
         "model": config["DEFAULT_MODEL"],
         "messages": messages,
-        "stream": False
+        "stream": False,
+        "think": False,
+        "options": {
+            "num_predict": config["MAX_RESPONSE_TOKENS"]
+        }
     }
     
     spinner = LoadingSpinner(message=f"{BLUE}Analyzing with {config['DEFAULT_MODEL']}")
@@ -164,10 +188,17 @@ def ask_ai(messages, config):
         result = response.json()
         spinner.stop()
         
-        # Extract token information
+        # Extract token information and performance metrics
         input_tokens = result.get("prompt_eval_count", 0)
         output_tokens = result.get("eval_count", 0)
+        eval_duration = result.get("eval_duration", 0) # Nanoseconds
         
+        tps = 0.0
+        if output_tokens > 0 and eval_duration > 0:
+            # Convert nanoseconds to seconds
+            duration_sec = eval_duration / 1_000_000_000
+            tps = output_tokens / duration_sec
+
         # Handle both new and old Ollama API response formats
         if "message" in result and "content" in result["message"]:
             content = result["message"]["content"]
@@ -175,24 +206,29 @@ def ask_ai(messages, config):
             # Old API format
             content = result["response"] if result["response"] else "La IA no generó una respuesta."
         else:
-            return f"Respuesta inesperada del servidor: {json.dumps(result)}", 0, 0
+            return f"Respuesta inesperada del servidor: {json.dumps(result)}", 0, 0, 0.0
         
-        return content, input_tokens, output_tokens
+        # Limpiar bloques de pensamiento de modelos de razonamiento
+        content = strip_thinking(content)
+        if not content:
+            content = "(La IA usó todos los tokens en razonamiento interno. Aumenta MAX_RESPONSE_TOKENS.)"
+        
+        return content, input_tokens, output_tokens, tps
     except requests.exceptions.Timeout:
         spinner.stop()
-        return f"❌ Error de tiempo: Ollama tardó más de {config['TIMEOUT']} segundos", 0, 0
+        return f"❌ Error de tiempo: Ollama tardó más de {config['TIMEOUT']} segundos", 0, 0, 0.0
     except requests.exceptions.ConnectionError as e:
         spinner.stop()
-        return f"❌ No se puede conectar a Ollama en {config['OLLAMA_URL']}: {e}", 0, 0
+        return f"❌ No se puede conectar a Ollama en {config['OLLAMA_URL']}: {e}", 0, 0, 0.0
     except requests.exceptions.RequestException as e:
         spinner.stop()
-        return f"❌ Error de solicitud: {e}", 0, 0
+        return f"❌ Error de solicitud: {e}", 0, 0, 0.0
     except json.JSONDecodeError as e:
         spinner.stop()
-        return f"❌ Error al procesar respuesta JSON: {e}", 0, 0
+        return f"❌ Error al procesar respuesta JSON: {e}", 0, 0, 0.0
     except Exception as e:
         spinner.stop()
-        return f"❌ Error inesperado: {type(e).__name__}: {e}", 0, 0
+        return f"❌ Error inesperado: {type(e).__name__}: {e}", 0, 0, 0.0
 
 def main():
     parser = argparse.ArgumentParser(
@@ -225,6 +261,18 @@ FUNCIONES DISPONIBLES:
      Borra todo el historial de conversaciones guardado.
      Uso: ai --clear-history
 
+  6. VER HISTORIAL (--history)
+     Muestra todas las interacciones guardadas.
+     Uso: ai --history
+
+  7. VER ÚLTIMA ENTRADA (--last)
+     Muestra solo la última interacción con la IA.
+     Uso: ai --last
+
+  8. RESTABLECER CONFIGURACIÓN (--reset-config)
+     Vuelve a los valores por defecto de la aplicación.
+     Uso: ai --reset-config
+
 CONFIGURACIÓN:
   El archivo de config se guarda en: ~/.term_ai_config.json
   El historial se guarda en: ~/.term_ai_history.json
@@ -245,10 +293,22 @@ EJEMPLOS COMPLETOS:
 
   # Limpiar historial
   $ ai --clear-history
+
+  # Ver historial completo
+  $ ai --history
+
+  # Ver última interacción
+  $ ai --last
+
+  # Restablecer valores
+  $ ai --reset-config
         """
     )
     parser.add_argument("command", nargs='?', help="El comando o pregunta para la IA.")
     parser.add_argument("--config", action="store_true", help="Abrir configuración interactiva.")
+    parser.add_argument("--reset-config", action="store_true", help="Restablecer configuración a los valores por defecto.")
+    parser.add_argument("--history", action="store_true", help="Mostrar el historial de conversaciones.")
+    parser.add_argument("--last", action="store_true", help="Mostrar la última entrada del historial.")
     parser.add_argument("--chat", action="store_true", help="Hablar directamente con la IA.")
     parser.add_argument("--prompt", help="Pregunta específica para el análisis del comando.")
     parser.add_argument("--clear-history", action="store_true", help="Borrar el historial de conversación.")
@@ -258,6 +318,44 @@ EJEMPLOS COMPLETOS:
         if os.path.exists(HISTORY_PATH):
             os.remove(HISTORY_PATH)
         print(f"{GREEN}✨ Historial borrado.{RESET}")
+        return
+
+    if args.history or args.last:
+        history = load_history()
+        if not history:
+            print(f"{YELLOW}📭 El historial está vacío.{RESET}")
+            return
+        
+        print(f"\n{BLUE}{BOLD}📜 Historial de Term-AI:{RESET}")
+        
+        # Cada interacción tiene 2 mensajes (user y assistant)
+        entries = []
+        for i in range(0, len(history), 2):
+            if i + 1 < len(history):
+                entries.append((history[i], history[i+1]))
+        
+        to_show = [entries[-1]] if args.last else entries
+        
+        for i, (user, assistant) in enumerate(to_show):
+            idx = len(entries) - 1 if args.last else i
+            print(f"{CYAN}{BOLD}┌── [Entrada {idx + 1}] ─────────────────────────────────{RESET}")
+            
+            # Mostrar contenido del usuario (truncar visualmente si es gigante)
+            u_content = user['content']
+            if len(u_content) > 1000 and not args.last:
+                u_content = u_content[:1000] + f"\n{YELLOW}[... Contenido truncado en vista previa ...]{RESET}"
+            
+            print(f"{GREEN}{BOLD}│ Usuario:{RESET} {u_content}")
+            print(f"{BLUE}{BOLD}│ IA:{RESET} {ITALIC}{assistant['content']}{RESET}")
+            print(f"{CYAN}└─────────────────────────────────────────────────────{RESET}\n")
+        return
+
+    if args.reset_config:
+        if os.path.exists(CONFIG_PATH):
+            os.remove(CONFIG_PATH)
+            print(f"{GREEN}🔄 Configuración restablecida a valores por defecto.{RESET}")
+        else:
+            print(f"{YELLOW}⚠️ No se encontró archivo de configuración personalizado.{RESET}")
         return
 
     config = load_config()
@@ -271,18 +369,65 @@ EJEMPLOS COMPLETOS:
         parser.print_help()
         return
 
-    system_prompt = "Eres un asistente técnico experto en terminales Linux. Sé conciso y directo."
+    lang = config.get("LANGUAGE", "es").lower()
+    token_limit = config["MAX_RESPONSE_TOKENS"]
+    
+    if lang == "en":
+        system_prompt = (
+            f"You are a technical expert assistant in Linux terminals. "
+            f"IMPORTANT: Your response MUST be complete in a maximum of {token_limit} tokens. "
+            f"Be extremely concise and direct. Do not use long lists or extensive explanations. "
+            f"Always finish with a complete sentence."
+        )
+        analysis_system = (
+            f"You are a technical expert assistant in Linux terminals. "
+            f"Analyze the command and its output based on context and history. "
+            f"IMPORTANT: Your response MUST be complete in a maximum of {token_limit} tokens. "
+            f"Be extremely concise (max 3-4 lines). Always finish with a complete sentence."
+        )
+        chat_label = "Direct Chat with AI"
+        feedback_label = "AI Feedback"
+        tokens_label = "Tokens - Input"
+        output_label = "Output"
+    else:
+        system_prompt = (
+            f"Eres un asistente técnico experto en terminales Linux. "
+            f"IMPORTANTE: Tu respuesta DEBE ser completa en máximo {token_limit} tokens. "
+            f"Sé extremadamente conciso y directo. No uses listas largas ni explicaciones extensas. "
+            f"Termina siempre con una oración completa."
+        )
+        analysis_system = (
+            f"Eres un asistente técnico experto en terminales Linux. "
+            f"Analiza el comando y su salida basándote en el contexto y el historial. "
+            f"IMPORTANTE: Tu respuesta DEBE ser completa en máximo {token_limit} tokens. "
+            f"Sé extremadamente conciso (máximo 3-4 líneas). Termina siempre con una oración completa."
+        )
+        chat_label = "Chat Directo con IA"
+        feedback_label = "IA Feedback"
+        tokens_label = "Tokens - Entrada"
+        output_label = "Salida"
     
     if args.chat:
-        print(f"\n{BLUE}{BOLD}💬 Chat Directo con IA:{RESET}")
+        print(f"\n{BLUE}{BOLD}💬 {chat_label}:{RESET}")
+        
+        # Intentar obtener contexto manual incluso en chat
+        local_context = get_local_context(args.command, config["KNOWLEDGE_BASE"])
+        user_content = args.command
+        if local_context:
+            if lang == "en":
+                user_content = f"Manual Context:\n{local_context}\n\nQuestion: {args.command}"
+            else:
+                user_content = f"Contexto Manual:\n{local_context}\n\nPregunta: {args.command}"
+
         messages = [{"role": "system", "content": system_prompt}] + history
-        messages.append({"role": "user", "content": args.command})
+        messages.append({"role": "user", "content": user_content})
         
-        explanation, input_tokens, output_tokens = ask_ai(messages, config)
+        explanation, input_tokens, output_tokens, tps = ask_ai(messages, config)
         print(f"{ITALIC}{explanation}{RESET}\n")
-        print(f"{CYAN}📊 Tokens - Entrada: {input_tokens} | Salida: {output_tokens}{RESET}\n")
+        print(f"{CYAN}📊 {tokens_label}: {input_tokens} | {output_label}: {output_tokens} ({tps:.1f} t/s){RESET}\n")
         
-        history.append({"role": "user", "content": args.command})
+        # Guardar en el historial (usamos el content completo para que --last sea veraz)
+        history.append({"role": "user", "content": user_content})
         history.append({"role": "assistant", "content": explanation})
         save_history(history, config["MAX_HISTORY"])
         return
@@ -292,17 +437,14 @@ EJEMPLOS COMPLETOS:
     if base_command in config["EXCLUDED_COMMANDS"]:
         return
 
-    output = sys.stdin.read(config["MAX_OUTPUT_CHARS"])
+    output = sys.stdin.read(config["MAX_INPUT_CHARS"])
     local_context = get_local_context(args.command, config["KNOWLEDGE_BASE"])
     
-    analysis_system = (
-        "Eres un asistente técnico experto en terminales Linux. "
-        "Analiza el comando y su salida basándote en el contexto y el historial. "
-    )
     if args.prompt:
-        analysis_system += f"Responde a esta duda específica: '{args.prompt}'. "
-    
-    analysis_system += "Sé muy conciso (máximo 4-5 líneas)."
+        if lang == "en":
+            analysis_system += f" Answer this specific doubt: '{args.prompt}'."
+        else:
+            analysis_system += f" Responde a esta duda específica: '{args.prompt}'."
 
     user_content = f"Comando: {args.command}\n"
     if args.prompt:
@@ -314,14 +456,14 @@ EJEMPLOS COMPLETOS:
     messages = [{"role": "system", "content": analysis_system}] + history
     messages.append({"role": "user", "content": user_content})
 
-    explanation, input_tokens, output_tokens = ask_ai(messages, config)
+    explanation, input_tokens, output_tokens, tps = ask_ai(messages, config)
     
-    print(f"{BLUE}{BOLD}🤖 IA Feedback:{RESET}")
+    print(f"{BLUE}{BOLD}🤖 {feedback_label}:{RESET}")
     print(f"{ITALIC}{explanation}{RESET}\n")
-    print(f"{CYAN}📊 Tokens - Entrada: {input_tokens} | Salida: {output_tokens}{RESET}\n")
+    print(f"{CYAN}📊 {tokens_label}: {input_tokens} | {output_label}: {output_tokens} ({tps:.1f} t/s){RESET}\n")
 
-    # Guardar en el historial una versión resumida para no saturar el contexto futuro
-    history.append({"role": "user", "content": f"Comando ejecutado: {args.command}"})
+    # Guardar en el historial la versión completa para que --history sea útil
+    history.append({"role": "user", "content": user_content})
     history.append({"role": "assistant", "content": explanation})
     save_history(history, config["MAX_HISTORY"])
 

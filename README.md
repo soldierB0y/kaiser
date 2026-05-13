@@ -72,49 +72,55 @@ ai config
 ```
 Esto te permitirá cambiar el modelo, la URL de Ollama, los tiempos de espera y la lista de comandos excluidos de forma interactiva.
 
-### 🧠 Memoria de Contexto
-Kaiser ahora tiene memoria. Recuerda las últimas interacciones para que puedas hacer preguntas de seguimiento:
-```bash
-ai "ls /directorio/inexistente"
-ai "por qué falló el comando anterior?"
-```
+### 🧠 Memoria y Historial
+Kaiser recuerda las últimas interacciones para que puedas hacer preguntas de seguimiento. Además, puedes gestionar este historial:
 
-### 🧹 Borrar Historial
-Si quieres que la IA olvide las interacciones previas y empiece de cero:
-```bash
-ai --clear-history
-```
+- **Ver todas las entradas**:
+  ```bash
+  ai --history
+  ```
+- **Ver solo la última interacción**:
+  ```bash
+  ai --last
+  ```
+- **Borrar historial**:
+  ```bash
+  ai --clear-history
+  ```
 
-### Exclusión de Comandos
-El sistema ignorará automáticamente comandos definidos en la lista de exclusión (ej. `top`, `vim`, `ssh`) para evitar saturar la IA con salidas innecesarias o flujos interactivos.
+### ⚙️ Configuración
+Puedes configurar Kaiser de tres maneras:
 
-## ⚙️ Configuración
-
-Aunque puedes editar el archivo `~/.term_ai_config.json` manualmente, la forma recomendada es usar el comando interactivo:
-
-```bash
-ai config
-```
+1.  **Comando Interactivo (Recomendado)**:
+    ```bash
+    ai config
+    ```
+2.  **Restablecer a valores de fábrica**:
+    ```bash
+    ai --reset-config
+    ```
+3.  **Edición manual**: Editando el archivo `~/.term_ai_config.json`.
 
 | Variable | Descripción | Valor por Defecto |
 | :--- | :--- | :--- |
 | `OLLAMA_URL` | Dirección del endpoint de chat de Ollama. | `"http://localhost:11434/api/chat"` |
 | `DEFAULT_MODEL` | Modelo de IA a utilizar. | `"qwen2.5-coder:7b"` |
-| `TIMEOUT` | Tiempo máximo de espera para la respuesta de la IA (segundos). | `30` |
-| `MAX_OUTPUT_CHARS` | Límite de caracteres de la salida del comando. | `2000` |
+| `TIMEOUT` | Tiempo máximo de espera para la respuesta (segundos). | `30` |
+| `MAX_INPUT_CHARS` | Límite de caracteres leídos de la salida del comando. | `2000` |
+| `MAX_RESPONSE_TOKENS` | Límite de tokens que la IA puede generar (concisión). | `500` |
 | `MAX_HISTORY` | Número de interacciones previas a recordar. | `5` |
 | `EXCLUDED_COMMANDS` | Lista de comandos ignorados. | `["top", "nano", "vim", ...]` |
 | `KNOWLEDGE_BASE` | Ruta al archivo de manual local. | `"/ruta/a/linuxCommands.txt"` |
 
 > [!TIP]
-> Si cambias el modelo en Ollama, asegúrate de haberlo descargado previamente usando `ollama pull <nombre-del-modelo>`.
+> **Modelos de Razonamiento**: Kaiser detecta automáticamente modelos como `gemma4` o `qwen3` y desactiva internamente los bloques `<think>` para entregarte la respuesta final directamente, optimizando tu presupuesto de tokens.
 
 ## 📁 Estructura del Proyecto
 
-- `term_ai.py`: El cerebro del proyecto. Gestiona la lógica y comunicación con Ollama.
-- `shell_integration.sh`: Proporciona la función `ai_wrapper` y el alias para tu shell.
-- `setup.sh`: Script de automatización para una instalación rápida y segura.
-- `linuxCommands.txt`: Tu manual local de referencia.
-- `plan.txt`: El diseño técnico original del proyecto.
+- `term_ai.py`: El motor en Python que gestiona la lógica y la API.
+- `shell_integration.sh`: Script de integración (Bash/Zsh).
+- `setup.sh`: Instalador automatizado.
+- `linuxCommands.txt`: Base de conocimientos local.
+- `plan.txt`: Hoja de ruta técnica.
 
 
